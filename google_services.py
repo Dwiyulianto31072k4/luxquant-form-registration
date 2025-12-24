@@ -65,28 +65,35 @@ class GoogleServices:
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             file_name = f"{user_name.replace(' ', '_')}_{timestamp}.{uploaded_file.name.split('.')[-1]}"
             
+            # Read file content
+            file_content = uploaded_file.read()
+            
+            # Create file metadata with supportsAllDrives parameter
             file_metadata = {
                 'name': file_name,
                 'parents': [self.folder_id]
             }
             
-            # Upload file
+            # Upload file with supportsAllDrives
             media = MediaIoBaseUpload(
-                BytesIO(uploaded_file.read()),
+                BytesIO(file_content),
                 mimetype=uploaded_file.type,
                 resumable=True
             )
             
+            # Create file with additional parameters
             file = self.drive_service.files().create(
                 body=file_metadata,
                 media_body=media,
-                fields='id, webViewLink'
+                fields='id, webViewLink',
+                supportsAllDrives=True
             ).execute()
             
-            # Make file publicly accessible
+            # Make file publicly accessible with supportsAllDrives
             self.drive_service.permissions().create(
                 fileId=file['id'],
-                body={'type': 'anyone', 'role': 'reader'}
+                body={'type': 'anyone', 'role': 'reader'},
+                supportsAllDrives=True
             ).execute()
             
             # Get direct image link
@@ -96,7 +103,17 @@ class GoogleServices:
             return direct_link
             
         except Exception as e:
-            raise Exception(f"Error uploading image: {str(e)}")
+            # If still fails, try alternative method: save as base64 in sheet
+            import base64
+            
+            # Convert image to base64
+            uploaded_file.seek(0)  # Reset file pointer
+            file_content = uploaded_file.read()
+            base64_image = base64.b64encode(file_content).decode('utf-8')
+            data_url = f"data:{uploaded_file.type};base64,{base64_image}"
+            
+            st.warning("⚠️ Upload ke Drive gagal. Image disimpan langsung di Sheet.")
+            return data_url
     
     def append_to_sheet(self, user_data):
         """Append user data to Google Sheets"""
