@@ -1,6 +1,6 @@
 def generate_telegram_link(user_id):
     """Generate Telegram profile link from User ID"""
-    return f"tg://user?id={user_id}"
+    return f"https://web.telegram.org/a/#{user_id}"
 
 def generate_explorer_link(network, tx_hash):
     """Generate blockchain explorer link based on network"""
