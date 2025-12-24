@@ -60,8 +60,8 @@ if page == "📝 Registration Form":
             else:
                 with st.spinner("⏳ Uploading data..."):
                     try:
-                        # Upload image to Google Drive
-                        image_url = gs.upload_image_to_drive(uploaded_image, user_name)
+                        # Upload image to Google Cloud Storage
+                        image_url = gs.upload_image_to_gcs(uploaded_image, user_name)
                         
                         # Generate links
                         telegram_link = generate_telegram_link(telegram_user_id)
