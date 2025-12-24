@@ -73,10 +73,7 @@ class GoogleServices:
             uploaded_file.seek(0)
             blob.upload_from_file(uploaded_file, content_type=uploaded_file.type)
             
-            # Make blob public (already set at bucket level, but ensure it's accessible)
-            blob.make_public()
-            
-            # Get public URL
+            # Get public URL (bucket is already public via allUsers permission)
             public_url = blob.public_url
             
             return public_url
