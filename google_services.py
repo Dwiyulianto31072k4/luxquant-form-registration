@@ -1,24 +1,23 @@
 import streamlit as st
 import gspread
 from google.oauth2.service_account import Credentials
-from googleapiclient.discovery import build
-from googleapiclient.http import MediaIoBaseUpload
+from google.cloud import storage
 import pandas as pd
 from io import BytesIO
 from datetime import datetime
 
 class GoogleServices:
     def __init__(self):
-        """Initialize Google Sheets and Drive services"""
+        """Initialize Google Sheets and Cloud Storage services"""
         # Get credentials from Streamlit secrets
         self.credentials_dict = dict(st.secrets["gcp_service_account"])
         self.sheet_id = st.secrets["google_config"]["sheet_id"]
-        self.folder_id = st.secrets["google_config"]["folder_id"]
+        self.bucket_name = st.secrets["google_config"]["bucket_name"]
         
         # Setup credentials
         self.scopes = [
             'https://www.googleapis.com/auth/spreadsheets',
-            'https://www.googleapis.com/auth/drive'
+            'https://www.googleapis.com/auth/cloud-platform'
         ]
         
         self.credentials = Credentials.from_service_account_info(
@@ -28,7 +27,8 @@ class GoogleServices:
         
         # Initialize services
         self.sheets_client = gspread.authorize(self.credentials)
-        self.drive_service = build('drive', 'v3', credentials=self.credentials)
+        self.storage_client = storage.Client(credentials=self.credentials, project=self.credentials_dict['project_id'])
+        self.bucket = self.storage_client.bucket(self.bucket_name)
         
         # Open the sheet
         self.sheet = self.sheets_client.open_by_key(self.sheet_id).sheet1
@@ -58,62 +58,32 @@ class GoogleServices:
         except Exception as e:
             st.error(f"Error initializing sheet: {str(e)}")
     
-    def upload_image_to_drive(self, uploaded_file, user_name):
-        """Upload image to Google Drive and return shareable link"""
+    def upload_image_to_gcs(self, uploaded_file, user_name):
+        """Upload image to Google Cloud Storage and return public URL"""
         try:
             # Prepare file metadata
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            file_name = f"{user_name.replace(' ', '_')}_{timestamp}.{uploaded_file.name.split('.')[-1]}"
+            file_extension = uploaded_file.name.split('.')[-1]
+            blob_name = f"{user_name.replace(' ', '_')}_{timestamp}.{file_extension}"
             
-            # Read file content
-            file_content = uploaded_file.read()
+            # Create blob
+            blob = self.bucket.blob(blob_name)
             
-            # Create file metadata with supportsAllDrives parameter
-            file_metadata = {
-                'name': file_name,
-                'parents': [self.folder_id]
-            }
+            # Upload file
+            uploaded_file.seek(0)
+            blob.upload_from_file(uploaded_file, content_type=uploaded_file.type)
             
-            # Upload file with supportsAllDrives
-            media = MediaIoBaseUpload(
-                BytesIO(file_content),
-                mimetype=uploaded_file.type,
-                resumable=True
-            )
+            # Make blob public (already set at bucket level, but ensure it's accessible)
+            blob.make_public()
             
-            # Create file with additional parameters
-            file = self.drive_service.files().create(
-                body=file_metadata,
-                media_body=media,
-                fields='id, webViewLink',
-                supportsAllDrives=True
-            ).execute()
+            # Get public URL
+            public_url = blob.public_url
             
-            # Make file publicly accessible with supportsAllDrives
-            self.drive_service.permissions().create(
-                fileId=file['id'],
-                body={'type': 'anyone', 'role': 'reader'},
-                supportsAllDrives=True
-            ).execute()
-            
-            # Get direct image link
-            file_id = file['id']
-            direct_link = f"https://drive.google.com/uc?export=view&id={file_id}"
-            
-            return direct_link
+            return public_url
             
         except Exception as e:
-            # If still fails, try alternative method: save as base64 in sheet
-            import base64
-            
-            # Convert image to base64
-            uploaded_file.seek(0)  # Reset file pointer
-            file_content = uploaded_file.read()
-            base64_image = base64.b64encode(file_content).decode('utf-8')
-            data_url = f"data:{uploaded_file.type};base64,{base64_image}"
-            
-            st.warning("⚠️ Upload ke Drive gagal. Image disimpan langsung di Sheet.")
-            return data_url
+            st.error(f"❌ Error uploading image: {str(e)}")
+            raise Exception(f"Failed to upload image: {str(e)}")
     
     def append_to_sheet(self, user_data):
         """Append user data to Google Sheets"""
