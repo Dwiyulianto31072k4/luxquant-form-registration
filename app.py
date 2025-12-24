@@ -2,7 +2,7 @@ import streamlit as st
 from datetime import datetime
 import pandas as pd
 from google_services import GoogleServices
-from utils import generate_telegram_link, generate_explorer_link, format_currency
+from utils import generate_telegram_link, generate_explorer_link, format_currency, calculate_expiry_date, get_days_remaining, get_status_color
 
 # Page config
 st.set_page_config(
@@ -19,7 +19,7 @@ def init_google_services():
 gs = init_google_services()
 
 # Sidebar navigation
-page = st.sidebar.selectbox("Menu", ["📝 Registration Form", "📊 User Dashboard"])
+page = st.sidebar.selectbox("Menu", ["📝 Registration Form", "📊 User Dashboard", "⏰ User Expiry"])
 
 # ==================== REGISTRATION FORM ====================
 if page == "📝 Registration Form":
@@ -183,6 +183,156 @@ elif page == "📊 User Dashboard":
                 label="📥 Download Data (CSV)",
                 data=csv,
                 file_name=f"luxquant_users_{datetime.now().strftime('%Y%m%d')}.csv",
+                mime="text/csv"
+            )
+            
+    except Exception as e:
+        st.error(f"❌ Error loading data: {str(e)}")
+
+# ==================== USER EXPIRY PAGE ====================
+elif page == "⏰ User Expiry":
+    st.title("⏰ User Expiry Management")
+    st.markdown("---")
+    
+    try:
+        # Load data from Google Sheets
+        df = gs.get_all_users()
+        
+        if df.empty:
+            st.info("Belum ada data user terdaftar.")
+        else:
+            # Calculate expiry for each user
+            df['Expiry Date'] = df.apply(
+                lambda row: calculate_expiry_date(row['Tanggal Mulai'], row['Paket']), 
+                axis=1
+            )
+            df['Days Remaining'] = df['Expiry Date'].apply(get_days_remaining)
+            df['Status'] = df['Days Remaining'].apply(get_status_color)
+            
+            # Statistics
+            col1, col2, col3, col4 = st.columns(4)
+            
+            active_users = len(df[(df['Days Remaining'].notna()) & (df['Days Remaining'] >= 0)])
+            expired_users = len(df[(df['Days Remaining'].notna()) & (df['Days Remaining'] < 0)])
+            expiring_soon = len(df[(df['Days Remaining'].notna()) & (df['Days Remaining'] >= 0) & (df['Days Remaining'] <= 7)])
+            lifetime_users = len(df[df['Paket'] == 'Lifetime'])
+            
+            with col1:
+                st.metric("🟢 Active", active_users)
+            with col2:
+                st.metric("🔴 Expired", expired_users)
+            with col3:
+                st.metric("🟠 Expiring Soon (≤7d)", expiring_soon)
+            with col4:
+                st.metric("♾️ Lifetime", lifetime_users)
+            
+            st.markdown("---")
+            
+            # Filters
+            col1, col2 = st.columns(2)
+            with col1:
+                status_filter = st.multiselect(
+                    "Filter by Status",
+                    options=["Active", "Expired", "Expiring Soon", "Lifetime"],
+                    default=["Active", "Expiring Soon", "Lifetime"]
+                )
+            with col2:
+                search = st.text_input("🔍 Search User", placeholder="Cari nama user...")
+            
+            # Apply filters
+            filtered_df = df.copy()
+            
+            # Status filter
+            if "Active" not in status_filter:
+                filtered_df = filtered_df[~((filtered_df['Days Remaining'].notna()) & 
+                                           (filtered_df['Days Remaining'] >= 8))]
+            if "Expired" not in status_filter:
+                filtered_df = filtered_df[~((filtered_df['Days Remaining'].notna()) & 
+                                           (filtered_df['Days Remaining'] < 0))]
+            if "Expiring Soon" not in status_filter:
+                filtered_df = filtered_df[~((filtered_df['Days Remaining'].notna()) & 
+                                           (filtered_df['Days Remaining'] >= 0) & 
+                                           (filtered_df['Days Remaining'] <= 7))]
+            if "Lifetime" not in status_filter:
+                filtered_df = filtered_df[filtered_df['Paket'] != 'Lifetime']
+            
+            # Search filter
+            if search:
+                filtered_df = filtered_df[filtered_df['Nama User'].str.contains(search, case=False, na=False)]
+            
+            # Sort by expiry date (soonest first, but put expired at end)
+            filtered_df['Sort Key'] = filtered_df['Days Remaining'].apply(
+                lambda x: 999999 if x is None else (1000000 + abs(x) if x < 0 else x)
+            )
+            filtered_df = filtered_df.sort_values('Sort Key')
+            
+            # Display users
+            st.markdown(f"### Showing {len(filtered_df)} users")
+            
+            for idx, row in filtered_df.iterrows():
+                expiry_date = row['Expiry Date']
+                days_remaining = row['Days Remaining']
+                status = row['Status']
+                
+                # Determine status text
+                if row['Paket'] == 'Lifetime':
+                    status_text = "♾️ Lifetime (No Expiry)"
+                    expiry_display = "Never"
+                elif days_remaining is None:
+                    status_text = "❓ Unknown"
+                    expiry_display = "N/A"
+                elif days_remaining < 0:
+                    status_text = f"🔴 Expired ({abs(days_remaining)} days ago)"
+                    expiry_display = expiry_date.strftime("%Y-%m-%d")
+                elif days_remaining == 0:
+                    status_text = "🟠 Expires Today"
+                    expiry_display = expiry_date.strftime("%Y-%m-%d")
+                elif days_remaining <= 7:
+                    status_text = f"🟠 Expiring in {days_remaining} days"
+                    expiry_display = expiry_date.strftime("%Y-%m-%d")
+                else:
+                    status_text = f"🟢 Active ({days_remaining} days left)"
+                    expiry_display = expiry_date.strftime("%Y-%m-%d")
+                
+                with st.expander(f"{status} {row['Nama User']} - {row['Paket']} - {status_text}"):
+                    col1, col2 = st.columns(2)
+                    
+                    with col1:
+                        st.markdown(f"""
+                        **User Info:**
+                        - Name: {row['Nama User']}
+                        - Package: {row['Paket']}
+                        - Price: {format_currency(row['Harga (USDT)'])}
+                        - Telegram: [Open Profile]({row['Telegram Link']})
+                        """)
+                    
+                    with col2:
+                        st.markdown(f"""
+                        **Subscription Info:**
+                        - Start Date: {row['Tanggal Mulai']}
+                        - Expiry Date: {expiry_display}
+                        - Status: {status_text}
+                        """)
+            
+            # Export
+            st.markdown("---")
+            
+            # Prepare export data
+            export_df = filtered_df.copy()
+            export_df['Expiry Date'] = export_df['Expiry Date'].apply(
+                lambda x: x.strftime("%Y-%m-%d") if x is not None else "Never"
+            )
+            export_df['Days Remaining'] = export_df['Days Remaining'].apply(
+                lambda x: str(x) if x is not None else "N/A"
+            )
+            export_df = export_df[['Nama User', 'Paket', 'Harga (USDT)', 'Tanggal Mulai', 
+                                   'Expiry Date', 'Days Remaining', 'Status']]
+            
+            csv = export_df.to_csv(index=False)
+            st.download_button(
+                label="📥 Download Expiry Report (CSV)",
+                data=csv,
+                file_name=f"luxquant_expiry_report_{datetime.now().strftime('%Y%m%d')}.csv",
                 mime="text/csv"
             )
             
