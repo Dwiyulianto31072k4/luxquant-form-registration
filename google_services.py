@@ -118,3 +118,4 @@ class GoogleServices:
             
         except Exception as e:
             raise Exception(f"Error reading sheet: {str(e)}")
+
